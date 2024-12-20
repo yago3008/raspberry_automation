@@ -1,58 +1,81 @@
-
-#!/usr/bin/python
+#!/usr/bin/python3
 # Copyright (c) 2018-2019 Stijn D'haese
+# Licensed under the MIT License
 
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-
-# The above copyright notice and this permission notice shall be included in all
-# copies or substantial portions of the Software.
-
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
-
-import datetime
+from datetime import datetime, timezone
 import Adafruit_DHT
 import os
-from influxdb import client as influxdb
+from influxdb import InfluxDBClient  # Biblioteca para InfluxDB 1.x
+from telegram import Bot
+ 
+HOST = 'localhost'
+PORT = 8086
+USER = 'admin'
+DB_NAME = 'temperature'
+TELEGRAM_TOKEN = '1321102558:AAHOEaSXY7uWU14Q5C8A_sZZM--0km2KNsw'
+CHAT_ID = '-881981569'
+current_time = datetime.now(timezone.utc).isoformat()
 
-#Read Data From DHT22 Sensor
-humidity, temperature = Adafruit_DHT.read_retry(22, 2)
 
-#InfluxDB Connection Details
-influxHost = 'localhost'
-influxUser = 'admin'
-with open(os.path.dirname(os.path.abspath(__file__)) + '/secretstring', 'r') as f:
-    influxPasswd = f.readline().strip()
-f.close()
+def send_telegram_alert(message):
+    bot = Bot(token=TELEGRAM_TOKEN)
+    try:
+        bot.send_message(chat_id=CHAT_ID, text=message)
+    except Exception as e:
+        print(f"Erro ao enviar alerta para o Telegram: {e}")
 
-#InfluxDB data
-influxdbName = 'temperature'
+def getHumidityAndTemperature():
+    humidity, temperature = Adafruit_DHT.read_retry(22, 2)
 
-#return influxDB friendly time 2017-02-26T13:33:49.00279827Z (not really required, but meh)
-current_time = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+    if humidity is None or temperature is None:
+        send_telegram_alert("Erro ao ler os dados do sensor. Verifique a conexão.")
+        exit(1)
 
-influx_metric = [{
-    'measurement': 'TemperatureSensor',
-    'time': current_time,
-    'fields': {
-        'temperature': temperature,
-        'humidity': humidity
-    }
-}]
+    return humidity, temperature
 
-#Saving data to InfluxDB
-try:
-    db = influxdb.InfluxDBClient(influxHost, 8086, influxUser, influxPasswd, influxdbName)
-    db.write_points(influx_metric)
-finally:
-    db.close()
+def getPasswd():
+    with open(os.path.dirname(os.path.abspath(__file__)) + '/secretstring', 'r') as f:
+        return f.readline().strip()
+
+def feedInfluxMetric(humidity, temperature):
+    influx_metric = [
+        {
+            'measurement': 'TemperatureSensor',
+            'time': current_time,
+            'fields': {
+                'temperature': temperature,
+                'humidity': humidity
+            }
+        }
+    ]
+    return influx_metric
+
+
+
+def main():
+    send_telegram_alert('Rasp Started successfully :)')
+    humidity, temperature = getHumidityAndTemperature()
+    influx_metric = feedInfluxMetric(humidity, temperature)
+
+    try:
+        db_client = InfluxDBClient(
+            host=HOST,
+            port=PORT,
+            username=USER,
+            password=getPasswd(),
+            database=DB_NAME
+        )
+
+        db_client.write_points(influx_metric)
+
+        print(f"Dados enviados com sucesso: {influx_metric}")
+
+    except Exception as e:
+        send_telegram_alert(f"Erro ao enviar dados para o InfluxDB: {e}")
+    finally:
+        db_client.close()
+
+
+main()
+
+
